@@ -33,7 +33,93 @@ async function main() {
 
     // Define your routes here (e.g., tasks, users)
 
-    // User Registration Route
+    const verifyToken = (req, res, next) => {
+        const token = req.headers["authorization"];
+    
+        if (!token) {
+            return res.status(403).json({ error: "No token provided" });
+        }
+    
+        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+            if (err) {
+                return res.status(403).json({ error: "Failed to authenticate token" });
+            }
+    
+            req.userId = decoded.userId;
+            next();
+        });
+    };
+
+    app.use(verifyToken); // This applies to all tasks routes
+
+// Create a task route (only accessible with JWT)
+app.post("/tasks", async (req, res) => {
+    try {
+        const { title, description, status, dueDate } = req.body;
+
+        if (!title) {
+            return res.status(400).json({ error: "Title is required" });
+        }
+
+        const db = client.db(dbName);
+        const task = {
+            title,
+            description,
+            status: status || "pending",
+            dueDate: dueDate ? new Date(dueDate) : null,
+            userId: req.userId, // Associate task with the logged-in user
+        };
+
+        const result = await db.collection("tasks").insertOne(task);
+        res.status(201).json({ message: "Task created successfully", taskId: result.insertedId });
+    } catch (error) {
+        console.error("Error creating task:", error);
+        res.status(500).json({ error: "Error creating task" });
+    }
+});
+
+    app.get("/tasks", async (req, res) => {
+        try {
+            const db = client.db(dbName);
+            const tasks = await db.collection("tasks").find().toArray();
+            res.json(tasks); // Return tasks as JSON
+        } catch (error) {
+            console.error("Error fetching tasks:", error);
+            res.status(500).json({ error: "Error fetching tasks" });
+        }
+    });
+
+    app.post("/tasks", async (req, res) => {
+        try {
+            const { title, description, status, dueDate } = req.body;
+    
+            // Validate input
+            if (!title) {
+                return res.status(400).json({ error: "Title is required" });
+            }
+    
+            const db = client.db(dbName);
+            const task = {
+                title,
+                description,
+                status: status || "pending", // Default to "pending" if no status is provided
+                dueDate: dueDate ? new Date(dueDate) : null, // If no dueDate is provided, set it as null
+            };
+    
+            // Insert the task into the database
+            const result = await db.collection("tasks").insertOne(task);
+            res.status(201).json({ message: "Task created successfully", taskId: result.insertedId });
+        } catch (error) {
+            console.error("Error creating task:", error);
+            res.status(500).json({ error: "Error creating task" });
+        }
+    });
+
+
+}
+
+
+// User Registration Route
 app.post("/users/signup", async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -99,17 +185,13 @@ app.post("/users/login", async (req, res) => {
 app.get('/', (req, res) => {
     res.send('Welcome to the Task Management API');
   });
-}
-
-
-
 
 
 
   main().catch(console.error);
 
 
-
+  
 // Start the server after connecting to MongoDB
 connectToMongoDB().then(() => {
     app.listen(3000, () => {
