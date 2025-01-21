@@ -23,6 +23,7 @@ async function connectToMongoDB() {
     }
 }
 
+
 async function main() {
     const db = await connectToMongoDB(mongoUri, dbName);
 
@@ -31,9 +32,8 @@ async function main() {
     });
 
     // Define your routes here (e.g., tasks, users)
-}
 
-// User Registration Route
+    // User Registration Route
 app.post("/users/signup", async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -97,12 +97,16 @@ app.post("/users/login", async (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.send('Welcome to the Task Management API');
-});
+    res.send('Welcome to the Task Management API');
+  });
+}
 
 
 
- main().catch(console.error);
+
+
+
+  main().catch(console.error);
 
 
 
