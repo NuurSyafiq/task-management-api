@@ -18,6 +18,22 @@ app.use(cors());
 const mongoUri = process.env.MONGO_URI;
 const dbName = "task_management";
 
+function authenticateJWT(req, res, next) {
+    const token = req.header('Authorization')?.split(' ')[1]; // Extract the token
+
+    if (!token) {
+        return res.status(403).json({ message: 'Access denied. No token provided.' });
+    }
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) {
+            return res.status(403).json({ message: 'Invalid or expired token.' });
+        }
+        req.user = user; // Attach user data to the request object
+        next();
+    });
+}
+
 async function connectToMongoDB(uri, dbName) {
     try {
         const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology: true });
@@ -38,6 +54,74 @@ async function main() {
     });
 
     // Define your routes here (e.g., tasks, users)
+
+    // Search endpoint
+    app.get("/tasks/search", async (req, res) => {
+        try {
+            const { title, status, description } = req.query;
+            
+            // Validate that at least one search parameter is provided
+            if (!title && !status && !description) {
+                return res.status(400).json({ 
+                    error: "Please provide at least one search parameter (title, status, or description)" 
+                });
+            }
+            
+            let searchCriteria = {};
+            
+            // Add search conditions with validation
+            if (title) {
+                if (typeof title !== 'string') {
+                    return res.status(400).json({ error: "Title must be a string" });
+                }
+                searchCriteria.title = { $regex: title, $options: 'i' };
+            }
+            
+            if (status) {
+                if (typeof status !== 'string') {
+                    return res.status(400).json({ error: "Status must be a string" });
+                }
+                // Optional: Validate status against allowed values
+                const validStatuses = ['pending', 'completed', 'in-progress'];
+                if (!validStatuses.includes(status.toLowerCase())) {
+                    return res.status(400).json({ 
+                        error: "Invalid status. Must be one of: pending, completed, in-progress" 
+                    });
+                }
+                searchCriteria.status = status.toLowerCase();
+            }
+            
+            if (description) {
+                if (typeof description !== 'string') {
+                    return res.status(400).json({ error: "Description must be a string" });
+                }
+                searchCriteria.description = { $regex: description, $options: 'i' };
+            }
+            
+            // Find tasks matching the criteria
+            const tasks = await db.collection('tasks').find(searchCriteria).toArray();
+            
+            // Return appropriate response based on results
+            if (tasks.length === 0) {
+                return res.status(200).json({ 
+                    message: "No tasks found matching the search criteria",
+                    tasks: [] 
+                });
+            }
+            
+            res.status(200).json({
+                message: `Found ${tasks.length} matching tasks`,
+                tasks: tasks
+            });
+            
+        } catch (error) {
+            console.error("Search error:", error);
+            res.status(500).json({ 
+                error: "An error occurred while searching tasks",
+                details: error.message 
+            });
+        }
+    });
 
     // Fetch all tasks
     app.get("/tasks", async (req, res) => {
@@ -69,27 +153,33 @@ async function main() {
     });
 
     // Create a new task
-    app.post("/tasks", async (req, res) => {
+    app.post("/tasks", authenticateJWT, async (req, res) => {
         try {
-            const { title, description, status, dueDate, userId } = req.body;
-            if (!title ||!status) {
+            console.log(req.body); // Log incoming request body for debugging
+    
+            const { title, description, status, dueDate } = req.body;
+            
+            if (!title || !status) {
                 return res.status(400).json({ error: "Missing required fields" });
             }
+    
             const parsedDueDate = new Date(dueDate);
             if (isNaN(parsedDueDate.getTime())) {
                 return res.status(400).json({ error: "Invalid dueDate" });
             }
+    
             const result = await db.collection("tasks").insertOne({
                 title,
                 description,
                 status,
                 dueDate: parsedDueDate,
-                userId: new ObjectId(userId),
+                userId: req.user.userId, // Get userId from JWT
             });
+            
             res.status(201).json({ message: "Task created", taskId: result.insertedId });
         } catch (error) {
             console.error("Error creating task:", error.message);
-            res.status(500).json({ error: "Internal server error", details: error.message });
+            res.status(500).json({ error: "Internal server error" });
         }
     });
 
