@@ -86,6 +86,12 @@ app.post("/users/login", async (req, res) => {
     }
 });
 
+app.get('/', (req, res) => {
+  res.send('Welcome to the Task Management API');
+});
+
+
+
 // Start the server after connecting to MongoDB
 connectToMongoDB().then(() => {
     app.listen(3000, () => {
