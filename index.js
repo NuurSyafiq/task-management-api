@@ -1,45 +1,34 @@
 const express = require("express");
+const cors = require("cors");
+const { MongoClient, ObjectId } = require("mongodb");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const { MongoClient, ObjectId } = require("mongodb");
 require("dotenv").config();
+const uri = 'mongodb+srv://syafiqnatty:fdABoCP97LQDJXns@cluster0.zzag0.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+require('dotenv').config();
+const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology: true });
+
+
+const JWT_SECRET = process.env.JWT_SECRET;
 
 const app = express();
 app.use(express.json());
+app.use(cors());
 
 const mongoUri = process.env.MONGO_URI;
-const JWT_SECRET = process.env.JWT_SECRET;
 const dbName = "task_management";
 
-const client = new MongoClient(mongoUri, { useNewUrlParser: true, useUnifiedTopology: true });
-
-async function connectToMongoDB() {
+async function connectToMongoDB(uri, dbName) {
     try {
+        const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology: true });
         await client.connect();
-        console.log("Connected to MongoDB");
+        console.log("Connected to MongoDB!");
+        return client.db(dbName);
     } catch (error) {
-        console.error("Error connecting to MongoDB:", error);
-        process.exit(1); // Stop the app if the database connection fails
+        console.error("Error connecting to MongoDB:", error.message);
+        throw error;
     }
 }
-
-// **Verify Token Middleware**
-const verifyToken = (req, res, next) => {
-    const token = req.headers["authorization"]?.split(" ")[1]; // Extract token from Authorization header
-
-    if (!token) {
-        return res.status(403).json({ error: "No token provided" });
-    }
-
-    jwt.verify(token, JWT_SECRET, (err, decoded) => {
-        if (err) {
-            return res.status(403).json({ error: "Failed to authenticate token" });
-        }
-
-        req.userId = decoded.userId; // Attach user ID to request object
-        next(); // Call the next middleware/route handler
-    });
-};
 
 async function main() {
     const db = await connectToMongoDB(mongoUri, dbName);
@@ -48,121 +37,159 @@ async function main() {
         res.json({ message: "Welcome to Task Management System!" });
     });
 
-    // Use verifyToken middleware for all routes below this point
-    app.use(verifyToken);
+    // Define your routes here (e.g., tasks, users)
 
-    // **Create a Task** Route (Protected)
+    // Fetch all tasks
+    app.get("/tasks", async (req, res) => {
+        try {
+            const tasks = await db.collection("tasks").find().toArray();
+            res.json({ tasks });
+        } catch (error) {
+            console.error("Error fetching tasks:", error.message);
+            res.status(500).json({ error: "Internal server error" });
+        }
+    });
+
+    // Fetch a specific task by ID
+    app.get("/tasks/:id", async (req, res) => {
+        try {
+            const task = await db.collection("tasks").findOne({
+                _id: new ObjectId(req.params.id),
+            });
+
+            if (!task) {
+                return res.status(404).json({ error: "Task not found" });
+            }
+
+            res.json(task);
+        } catch (error) {
+            console.error("Error fetching task:", error.message);
+            res.status(500).json({ error: "Internal server error" });
+        }
+    });
+
+    // Create a new task
     app.post("/tasks", async (req, res) => {
+        try {
+            const { title, description, status, dueDate, userId } = req.body;
+            if (!title ||!status) {
+                return res.status(400).json({ error: "Missing required fields" });
+            }
+            const parsedDueDate = new Date(dueDate);
+            if (isNaN(parsedDueDate.getTime())) {
+                return res.status(400).json({ error: "Invalid dueDate" });
+            }
+            const result = await db.collection("tasks").insertOne({
+                title,
+                description,
+                status,
+                dueDate: parsedDueDate,
+                userId: new ObjectId(userId),
+            });
+            res.status(201).json({ message: "Task created", taskId: result.insertedId });
+        } catch (error) {
+            console.error("Error creating task:", error.message);
+            res.status(500).json({ error: "Internal server error", details: error.message });
+        }
+    });
+
+    // Update a task
+    app.put("/tasks/:id", async (req, res) => {
         try {
             const { title, description, status, dueDate } = req.body;
 
-            // Validate input
-            if (!title) {
-                return res.status(400).json({ error: "Title is required" });
+            const result = await db.collection("tasks").updateOne(
+                { _id: new ObjectId(req.params.id) },
+                { $set: { title, description, status, dueDate: new Date(dueDate) } }
+            );
+
+            if (result.matchedCount === 0) {
+                return res.status(404).json({ error: "Task not found" });
             }
 
-            const db = client.db(dbName);
-            const task = {
-                title,
-                description,
-                status: status || "pending", // Default to "pending" if no status is provided
-                dueDate: dueDate ? new Date(dueDate) : null, // If no dueDate is provided, set it as null
-                userId: req.userId, // Associate task with the logged-in user
-            };
-
-            const result = await db.collection("tasks").insertOne(task);
-            res.status(201).json({ message: "Task created successfully", taskId: result.insertedId });
+            res.json({ message: "Task updated" });
         } catch (error) {
-            console.error("Error creating task:", error);
-            res.status(500).json({ error: "Error creating task" });
-        }
-    });
-
-    // **Get All Tasks** Route (Protected)
-    app.get("/tasks", async (req, res) => {
-        try {
-            const db = client.db(dbName);
-            const tasks = await db.collection("tasks").find({ userId: req.userId }).toArray(); // Fetch tasks for the logged-in user
-            res.json(tasks); // Return tasks as JSON
-        } catch (error) {
-            console.error("Error fetching tasks:", error);
-            res.status(500).json({ error: "Error fetching tasks" });
-        }
-    });
-
-    // User Registration Route
-    app.post("/users/signup", async (req, res) => {
-        try {
-            const { email, password } = req.body;
-
-            // Validate input
-            if (!email || !password) {
-                return res.status(400).json({ error: "Email and password are required" });
-            }
-
-            const db = client.db(dbName);
-
-            // Check if the email already exists
-            const existingUser = await db.collection("users").findOne({ email });
-            if (existingUser) {
-                return res.status(409).json({ error: "Email is already registered" });
-            }
-
-            // Hash the password
-            const hashedPassword = await bcrypt.hash(password, 10);
-
-            // Insert the user into the database
-            const result = await db.collection("users").insertOne({ email, password: hashedPassword });
-            res.status(201).json({ message: "User created successfully", userId: result.insertedId });
-        } catch (error) {
-            console.error("Error during signup:", error);
+            console.error("Error updating task:", error.message);
             res.status(500).json({ error: "Internal server error" });
         }
     });
 
-    // User Login Route
-    app.post("/users/login", async (req, res) => {
+    // Delete a task
+    app.delete("/tasks/:id", async (req, res) => {
+        try {
+            const result = await db.collection("tasks").deleteOne({
+                _id: new ObjectId(req.params.id),
+            });
+
+            if (result.deletedCount === 0) {
+                return res.status(404).json({ error: "Task not found" });
+            }
+
+            res.json({ message: "Task deleted" });
+        } catch (error) {
+            console.error("Error deleting task:", error.message);
+            res.status(500).json({ error: "Internal server error" });
+        }
+    });
+
+    // User registration route
+    app.post('/users/signup', async (req, res) => {
         try {
             const { email, password } = req.body;
+            // Hash the password
+            const hashedPassword = await bcrypt.hash(password, 12);
+            const result = await db.collection('users').insertOne({
+                email,
+                password: hashedPassword
+            });
+            res.status(201).json({ message: 'User created successfully', userId: result.insertedId });
+        } catch (error) {
+            console.error('Error creating user:', error);
+            res.status(500).json({ message: 'Internal server error', error: error.message });
+        }
+    });
 
-            // Validate input
-            if (!email || !password) {
-                return res.status(400).json({ error: "Email and password are required" });
-            }
+    // User login route
+    app.post('/users/login', async (req, res) => {
+        try {
+           
 
-            const db = client.db(dbName);
-
-            // Check if the user exists
-            const user = await db.collection("users").findOne({ email });
+            const { email, password } = req.body;
+            const user = await client.db(dbName).collection('users').findOne({ email });
             if (!user) {
-                return res.status(401).json({ error: "Invalid email or password" });
+                return res.status(401).json({ message: 'Invalid email or password' });
             }
-
-            // Compare passwords
             const validPassword = await bcrypt.compare(password, user.password);
             if (!validPassword) {
-                return res.status(401).json({ error: "Invalid email or password" });
+                return res.status(401).json({ message: 'Invalid email or password' });
             }
-
-            // Generate JWT token
-            const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: "1h" });
+            // Generate JWT
+            
+            const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '1h' });
             res.json({ token });
         } catch (error) {
-            console.error("Error during login:", error);
-            res.status(500).json({ error: "Internal server error" });
+            console.error('Error logging in:', error);
+            res.status(500).json({ message: 'Internal server error' });
         }
-    });
-
-    app.get('/', (req, res) => {
-        res.send('Welcome to the Task Management API');
     });
 }
 
-// Connect to MongoDB and start the server
-connectToMongoDB().then(() => {
-    app.listen(3000, () => {
-        console.log("Server is running on port 3000");
-    });
+
+process.on('SIGINT', async () => {
+    try {
+        await client.close();
+        console.log('MongoDB connection closed');
+        process.exit(0);
+    } catch (err) {
+        console.error('Error closing MongoDB connection:', err);
+        process.exit(1);
+    }
 });
 
+
+
 main().catch(console.error);
+
+app.listen(3000, () => {
+    console.log("Server is running on port 3000");
+});
